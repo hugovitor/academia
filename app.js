@@ -409,9 +409,15 @@ function wireSegmented(containerId) {
 }
 wireSegmented('formNivel');
 wireSegmented('formCompanhia');
+wireSegmented('formParceiroNivel');
 
-document.querySelectorAll('#formDores .checkbox-chip input').forEach((cb) => {
+document.querySelectorAll('#formDores .checkbox-chip input, #formParceiroDores .checkbox-chip input').forEach((cb) => {
   cb.addEventListener('change', () => cb.closest('.checkbox-chip').classList.toggle('active', cb.checked));
+});
+
+const parceiroFields = document.getElementById('parceiroFields');
+document.querySelectorAll('#formCompanhia .segmented-btn').forEach((btn) => {
+  btn.addEventListener('click', () => parceiroFields.classList.toggle('hidden', btn.dataset.value !== 'dupla'));
 });
 
 const DOR_LABELS = {
@@ -425,17 +431,27 @@ const DOR_LABELS = {
 };
 
 function readProfileFromForm() {
-  return {
+  const companhia = selectedSegmentedValue('formCompanhia') || 'sozinho';
+  const profile = {
     objetivo: document.getElementById('formObjetivo').value,
     nivel: selectedSegmentedValue('formNivel') || 'iniciante',
     altura: document.getElementById('formAltura').value.trim(),
     peso: document.getElementById('formPeso').value.trim(),
     dias: document.getElementById('formDias').value,
     duracao: document.getElementById('formDuracao').value,
-    companhia: selectedSegmentedValue('formCompanhia') || 'sozinho',
+    companhia,
     dores: Array.from(document.querySelectorAll('#formDores input:checked')).map((cb) => cb.value),
     obs: document.getElementById('formObs').value.trim(),
   };
+  if (companhia === 'dupla') {
+    profile.parceiro = {
+      objetivo: document.getElementById('formParceiroObjetivo').value,
+      nivel: selectedSegmentedValue('formParceiroNivel') || 'iniciante',
+      peso: document.getElementById('formParceiroPeso').value.trim(),
+      dores: Array.from(document.querySelectorAll('#formParceiroDores input:checked')).map((cb) => cb.value),
+    };
+  }
+  return profile;
 }
 
 function prefillForm() {
@@ -446,13 +462,25 @@ function prefillForm() {
   document.getElementById('formPeso').value = profile.peso || '';
   document.getElementById('formDias').value = profile.dias || '3';
   document.getElementById('formDuracao').value = profile.duracao || '45';
-  setSegmentedActive('formCompanhia', profile.companhia || 'sozinho');
+  const companhia = profile.companhia || 'sozinho';
+  setSegmentedActive('formCompanhia', companhia);
+  parceiroFields.classList.toggle('hidden', companhia !== 'dupla');
   const dores = new Set(profile.dores || []);
   document.querySelectorAll('#formDores .checkbox-chip input').forEach((cb) => {
     cb.checked = dores.has(cb.value);
     cb.closest('.checkbox-chip').classList.toggle('active', cb.checked);
   });
   document.getElementById('formObs').value = profile.obs || '';
+
+  const parceiro = profile.parceiro || {};
+  document.getElementById('formParceiroObjetivo').value = parceiro.objetivo || 'hipertrofia';
+  setSegmentedActive('formParceiroNivel', parceiro.nivel || 'iniciante');
+  document.getElementById('formParceiroPeso').value = parceiro.peso || '';
+  const parceiroDores = new Set(parceiro.dores || []);
+  document.querySelectorAll('#formParceiroDores .checkbox-chip input').forEach((cb) => {
+    cb.checked = parceiroDores.has(cb.value);
+    cb.closest('.checkbox-chip').classList.toggle('active', cb.checked);
+  });
 }
 
 const OBJETIVO_LABELS = {
@@ -489,6 +517,21 @@ function buildPromptFromProfile(profile) {
     linhas.push('Sem dores ou lesões relatadas.');
   }
   if (profile.obs) linhas.push(`Observações adicionais: ${profile.obs}`);
+
+  if (profile.companhia === 'dupla' && profile.parceiro) {
+    const p = profile.parceiro;
+    linhas.push('', '--- Dados da segunda pessoa (vão treinar juntos, na mesma sessão) ---');
+    linhas.push(`Objetivo do parceiro(a): ${OBJETIVO_LABELS[p.objetivo] || p.objetivo}`);
+    linhas.push(`Nível do parceiro(a): ${NIVEL_LABELS[p.nivel] || p.nivel}`);
+    if (p.peso) linhas.push(`Peso do parceiro(a): ${p.peso} kg`);
+    if (p.dores.length) {
+      const dorLabels = p.dores.map((d) => DOR_LABELS[d] || d).join(', ');
+      linhas.push(`Dores ou lesões do parceiro(a): ${dorLabels}. Evite ou adapte exercícios que sobrecarreguem essas áreas para essa pessoa também.`);
+    } else {
+      linhas.push('Parceiro(a) sem dores ou lesões relatadas.');
+    }
+    linhas.push('Monte UM ÚNICO plano para as duas pessoas seguirem juntas, nos mesmos exercícios/estações. Quando os níveis, pesos ou objetivos forem diferentes, inclua na "descricao" uma sugestão de ajuste de carga ou repetições para cada pessoa (ex: "Iniciante: use uma carga mais leve e foque na execução; Intermediário: aumente a carga mantendo a técnica").');
+  }
 
   return linhas.join('\n');
 }
@@ -886,6 +929,71 @@ function playBeep() {
   }
 }
 
+// ---------- Compartilhar treino (treino a dois em celulares separados) ----------
+function encodePlanForShare(plan) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(plan))));
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodePlanFromShare(encoded) {
+  let b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
+async function sharePlan(plan) {
+  const encoded = encodePlanForShare(plan);
+  const url = `${location.origin}${location.pathname}?import=${encodeURIComponent(encoded)}`;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Treino IA', text: `Treino "${plan.nomePlano}" pra treinarmos juntos:`, url });
+    } catch {
+      /* usuário cancelou o compartilhamento */
+    }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    alert('Link do treino copiado! Envie para quem vai treinar com você.');
+  } catch {
+    prompt('Copie o link abaixo e envie para quem vai treinar com você:', url);
+  }
+}
+
+document.getElementById('btnShareWorkout').addEventListener('click', () => {
+  const plan = load(STORAGE_KEYS.current, null);
+  if (plan) sharePlan(plan);
+});
+
+function tryImportFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const encoded = params.get('import');
+  if (!encoded) return false;
+  window.history.replaceState({}, '', location.pathname);
+
+  let plan;
+  try {
+    plan = sanitizePlan(decodePlanFromShare(encoded));
+  } catch {
+    alert('Não foi possível importar o treino compartilhado — o link pode estar corrompido.');
+    return false;
+  }
+
+  const existing = load(STORAGE_KEYS.current, null);
+  if (existing && !confirm(`Importar o treino compartilhado "${plan.nomePlano}"? Isso substitui o treino em andamento (seu histórico anterior continua salvo).`)) {
+    return false;
+  }
+
+  plan.id = `w_${Date.now()}`;
+  plan.createdAt = new Date().toISOString();
+  plan.diaAtivo = 0;
+  save(STORAGE_KEYS.current, plan);
+  const history = load(STORAGE_KEYS.history, []);
+  history.push(plan);
+  save(STORAGE_KEYS.history, history);
+  return true;
+}
+
 // ---------- Inicialização ----------
 function renderCurrentOrGenerate() {
   const current = load(STORAGE_KEYS.current, null);
@@ -898,7 +1006,12 @@ function renderCurrentOrGenerate() {
   }
 }
 
-renderCurrentOrGenerate();
+if (tryImportFromUrl()) {
+  renderWorkout(load(STORAGE_KEYS.current, null));
+  showScreen('workout');
+} else {
+  renderCurrentOrGenerate();
+}
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

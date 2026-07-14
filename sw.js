@@ -1,9 +1,9 @@
-const CACHE_NAME = 'treino-ia-v5';
+const CACHE_NAME = 'treino-ia-v6';
 const APP_SHELL = [
   './',
   './index.html',
-  './style.css',
-  './app.js',
+  './style.css?v=6',
+  './app.js?v=6',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

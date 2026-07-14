@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" href="icons/icon-192.png">
 <title>Treino IA</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
 
@@ -156,6 +156,50 @@
       </div>
     </label>
 
+    <div id="parceiroFields" class="hidden">
+      <div class="settings-divider"></div>
+      <h3 class="section-title">Dados de quem vai treinar com você</h3>
+
+      <label class="field">
+        <span>Objetivo do parceiro(a)</span>
+        <select id="formParceiroObjetivo">
+          <option value="hipertrofia">Hipertrofia (ganho de massa)</option>
+          <option value="emagrecimento">Emagrecimento</option>
+          <option value="condicionamento">Condicionamento físico</option>
+          <option value="forca">Força</option>
+          <option value="definicao">Definição muscular</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Nível do parceiro(a)</span>
+        <div class="segmented" id="formParceiroNivel">
+          <button type="button" class="segmented-btn" data-value="iniciante">Iniciante</button>
+          <button type="button" class="segmented-btn" data-value="intermediario">Intermediário</button>
+          <button type="button" class="segmented-btn" data-value="avancado">Avançado</button>
+        </div>
+      </label>
+
+      <label class="field">
+        <span>Peso do parceiro(a) (kg)</span>
+        <input id="formParceiroPeso" type="number" inputmode="decimal" min="30" max="300" step="0.5" placeholder="Ex: 60">
+      </label>
+
+      <label class="field">
+        <span>Dores ou lesões do parceiro(a)</span>
+        <div class="checkbox-grid" id="formParceiroDores">
+          <label class="checkbox-chip"><input type="checkbox" value="joelho"> Joelho</label>
+          <label class="checkbox-chip"><input type="checkbox" value="ombro"> Ombro</label>
+          <label class="checkbox-chip"><input type="checkbox" value="lombar"> Lombar / coluna</label>
+          <label class="checkbox-chip"><input type="checkbox" value="punho"> Punho</label>
+          <label class="checkbox-chip"><input type="checkbox" value="cotovelo"> Cotovelo</label>
+          <label class="checkbox-chip"><input type="checkbox" value="tornozelo"> Tornozelo</label>
+          <label class="checkbox-chip"><input type="checkbox" value="pescoco"> Pescoço</label>
+        </div>
+      </label>
+      <div class="settings-divider"></div>
+    </div>
+
     <label class="field">
       <span>Sente dor ou tem lesão em algum lugar?</span>
       <div class="checkbox-grid" id="formDores">
@@ -194,6 +238,7 @@
     </div>
     <div id="exerciseList" class="exercise-list"></div>
     <button id="btnAddExercise" class="btn ghost">+ Adicionar exercício</button>
+    <button id="btnShareWorkout" class="btn ghost">📤 Compartilhar treino</button>
     <button id="btnNewWorkout" class="btn ghost">+ Novo treino</button>
   </section>
 
@@ -281,6 +326,6 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
