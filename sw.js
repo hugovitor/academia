@@ -1,4 +1,4 @@
-const CACHE_NAME = 'treino-ia-v1';
+const CACHE_NAME = 'treino-ia-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -29,8 +29,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Nunca cachear chamadas à API do Gemini: sempre precisam ir para a rede.
-  if (url.hostname.includes('generativelanguage.googleapis.com')) {
+  // Nunca cachear chamadas à API da Groq: sempre precisam ir para a rede.
+  if (url.hostname.includes('api.groq.com')) {
     return;
   }
 

@@ -29,53 +29,70 @@ const ICONS = {
 };
 const iconFor = (group) => ICONS[group] || ICONS.corpo_todo;
 
-// ---------- Schema estruturado para o Gemini ----------
-const WORKOUT_SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    nomeTreino: { type: 'STRING' },
-    duracaoEstimadaMin: { type: 'INTEGER' },
-    exercicios: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          nome: { type: 'STRING' },
-          grupoMuscular: {
-            type: 'STRING',
-            enum: ['peito', 'costas', 'pernas', 'ombros', 'biceps', 'triceps', 'abdomen', 'cardio', 'corpo_todo'],
-          },
-          series: { type: 'INTEGER' },
-          repeticoes: { type: 'STRING' },
-          descansoSegundos: { type: 'INTEGER' },
-          descricao: { type: 'STRING' },
-        },
-        required: ['nome', 'grupoMuscular', 'series', 'repeticoes', 'descansoSegundos', 'descricao'],
-      },
-    },
-  },
-  required: ['nomeTreino', 'duracaoEstimadaMin', 'exercicios'],
-};
+// ---------- Geração via Groq (API compatível com OpenAI) ----------
+const GROQ_GROUPS = ['peito', 'costas', 'pernas', 'ombros', 'biceps', 'triceps', 'abdomen', 'cardio', 'corpo_todo'];
+
+function stripCodeFence(text) {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return match ? match[1] : trimmed;
+}
+
+function sanitizeWorkout(raw) {
+  const groups = new Set(GROQ_GROUPS);
+  const exerciciosRaw = Array.isArray(raw?.exercicios) ? raw.exercicios : [];
+  const exercicios = exerciciosRaw.map((ex) => ({
+    nome: String(ex?.nome || 'Exercício'),
+    grupoMuscular: groups.has(ex?.grupoMuscular) ? ex.grupoMuscular : 'corpo_todo',
+    series: Number.isFinite(Number(ex?.series)) ? Math.max(1, Math.round(Number(ex.series))) : 3,
+    repeticoes: String(ex?.repeticoes || '12'),
+    descansoSegundos: Number.isFinite(Number(ex?.descansoSegundos)) ? Math.max(10, Math.round(Number(ex.descansoSegundos))) : 45,
+    descricao: String(ex?.descricao || ''),
+    completedSets: 0,
+  }));
+  if (!exercicios.length) throw new Error('A IA não retornou nenhum exercício. Tente descrever o treino de outra forma.');
+
+  return {
+    nomeTreino: String(raw?.nomeTreino || 'Treino'),
+    duracaoEstimadaMin: Number.isFinite(Number(raw?.duracaoEstimadaMin)) ? Math.round(Number(raw.duracaoEstimadaMin)) : 30,
+    exercicios,
+  };
+}
 
 async function generateWorkout(userPrompt, apiKey) {
-  const model = 'gemini-2.0-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const model = 'llama-3.3-70b-versatile';
+  const url = 'https://api.groq.com/openai/v1/chat/completions';
 
-  const prompt = `Você é um personal trainer. Monte um treino de academia em português a partir do pedido do usuário abaixo.
-Para cada exercício, escreva em "descricao" um texto descritivo curto (2 a 3 frases) explicando como executar o movimento corretamente e pontos de atenção.
-Defina "descansoSegundos" com um tempo de descanso realista entre séries (normalmente 30 a 90 segundos).
-Escolha "grupoMuscular" apenas dentre os valores permitidos pelo schema.
-Pedido do usuário: "${userPrompt}"`;
+  const systemPrompt = `Você é um personal trainer. Responda APENAS com um JSON válido (sem markdown, sem texto fora do JSON) no formato exato:
+{
+  "nomeTreino": string,
+  "duracaoEstimadaMin": number,
+  "exercicios": [
+    {
+      "nome": string,
+      "grupoMuscular": um destes valores exatos: ${GROQ_GROUPS.map((g) => `"${g}"`).join(' | ')},
+      "series": number,
+      "repeticoes": string,
+      "descansoSegundos": number entre 20 e 120,
+      "descricao": string com 2 a 3 frases explicando como executar o movimento corretamente e pontos de atenção
+    }
+  ]
+}`;
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: WORKOUT_SCHEMA,
-      },
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Monte um treino de academia em português para o seguinte pedido: "${userPrompt}"` },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
     }),
   });
 
@@ -86,13 +103,12 @@ Pedido do usuário: "${userPrompt}"`;
   }
 
   const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = data?.choices?.[0]?.message?.content;
   if (!text) throw new Error('A IA não retornou um treino válido. Tente novamente.');
 
-  const workout = JSON.parse(text);
+  const workout = sanitizeWorkout(JSON.parse(stripCodeFence(text)));
   workout.id = `w_${Date.now()}`;
   workout.createdAt = new Date().toISOString();
-  workout.exercicios = workout.exercicios.map((ex) => ({ ...ex, completedSets: 0 }));
   return workout;
 }
 
@@ -176,7 +192,7 @@ document.getElementById('btnGenerate').addEventListener('click', async () => {
   }
   const apiKey = load(STORAGE_KEYS.apiKey, '');
   if (!apiKey) {
-    showError('Configure sua chave gratuita do Gemini em ⚙️ Configurações antes de gerar um treino.');
+    showError('Configure sua chave gratuita da Groq em ⚙️ Configurações antes de gerar um treino.');
     return;
   }
 
