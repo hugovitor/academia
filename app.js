@@ -3,6 +3,9 @@ const STORAGE_KEYS = {
   apiKey: 'treinoia_api_key',
   history: 'treinoia_history',
   current: 'treinoia_current',
+  settings: 'treinoia_settings',
+  weights: 'treinoia_weights',
+  sessions: 'treinoia_sessions',
 };
 
 const load = (key, fallback) => {
@@ -14,6 +17,27 @@ const load = (key, fallback) => {
   }
 };
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+
+// ---------- Configurações (tema, som, vibração) ----------
+const DEFAULT_SETTINGS = { theme: 'dark', sound: true, vibration: true };
+
+function loadSettings() {
+  return { ...DEFAULT_SETTINGS, ...load(STORAGE_KEYS.settings, {}) };
+}
+
+function applyTheme(theme) {
+  document.body.classList.toggle('theme-light', theme === 'light');
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', theme === 'light' ? '#f1f5f9' : '#0f172a');
+}
+
+applyTheme(loadSettings().theme);
 
 // ---------- Ícones locais por grupo muscular ----------
 const ICONS = {
@@ -29,7 +53,7 @@ const ICONS = {
 };
 const iconFor = (group) => ICONS[group] || ICONS.corpo_todo;
 
-// ---------- Imagens reais de aparelhos (Wikimedia Commons, sem chave) ----------
+// ---------- Imagens reais de execução (Wikimedia Commons, sem chave) ----------
 const IMAGE_SEARCH_TERMS = {
   peito: 'bench press exercise gym',
   costas: 'lat pulldown machine gym',
@@ -43,9 +67,8 @@ const IMAGE_SEARCH_TERMS = {
 };
 const IMAGE_CACHE_KEY = 'treinoia_img_cache';
 
-async function fetchGroupImage(group) {
-  const term = IMAGE_SEARCH_TERMS[group] || IMAGE_SEARCH_TERMS.corpo_todo;
-  const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term + ' filetype:bitmap')}&gsrlimit=1&gsrnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=300&format=json&origin=*`;
+async function fetchImageByTerm(term, width) {
+  const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term + ' filetype:bitmap')}&gsrlimit=1&gsrnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=${width}&format=json&origin=*`;
   const res = await fetch(url);
   if (!res.ok) return null;
   const data = await res.json();
@@ -55,23 +78,53 @@ async function fetchGroupImage(group) {
   return page?.imageinfo?.[0]?.thumburl || null;
 }
 
-async function ensureGroupImages(groups) {
+async function getOrFetchImage(term) {
+  const key = term.trim().toLowerCase();
   const cache = load(IMAGE_CACHE_KEY, {});
-  const missing = [...new Set(groups)].filter((g) => !cache[g]);
-  if (!missing.length) return cache;
+  if (cache[key]) return cache[key];
+  const url = await fetchImageByTerm(term, 600);
+  if (url) {
+    cache[key] = url;
+    save(IMAGE_CACHE_KEY, cache);
+  }
+  return url;
+}
 
-  await Promise.all(
-    missing.map(async (group) => {
-      try {
-        const imgUrl = await fetchGroupImage(group);
-        if (imgUrl) cache[group] = imgUrl;
-      } catch {
-        /* sem internet ou API indisponível: mantém o ícone local */
-      }
-    })
-  );
-  save(IMAGE_CACHE_KEY, cache);
-  return cache;
+// ---------- Peso por exercício (lembra a última carga usada) ----------
+const normalizeName = (nome) => nome.trim().toLowerCase();
+
+function getLastWeight(nome) {
+  const weights = load(STORAGE_KEYS.weights, {});
+  return weights[normalizeName(nome)]?.last ?? null;
+}
+function saveWeight(nome, peso) {
+  const weights = load(STORAGE_KEYS.weights, {});
+  weights[normalizeName(nome)] = { last: peso, updatedAt: new Date().toISOString() };
+  save(STORAGE_KEYS.weights, weights);
+}
+
+// ---------- Sessões treinadas (streak + calendário) ----------
+function dateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function logSessionToday() {
+  const sessions = load(STORAGE_KEYS.sessions, []);
+  const today = dateStr();
+  if (!sessions.includes(today)) {
+    sessions.push(today);
+    save(STORAGE_KEYS.sessions, sessions);
+  }
+}
+function computeStreak(sessions) {
+  const set = new Set(sessions);
+  const cursor = new Date();
+  if (!set.has(dateStr(cursor))) cursor.setDate(cursor.getDate() - 1);
+  let streak = 0;
+  while (set.has(dateStr(cursor))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
 }
 
 // ---------- Geração via Groq (API compatível com OpenAI) ----------
@@ -85,16 +138,20 @@ function stripCodeFence(text) {
 
 function sanitizeExercicios(exerciciosRaw) {
   const groups = new Set(GROQ_GROUPS);
-  const exercicios = (Array.isArray(exerciciosRaw) ? exerciciosRaw : []).map((ex) => ({
-    nome: String(ex?.nome || 'Exercício'),
-    grupoMuscular: groups.has(ex?.grupoMuscular) ? ex.grupoMuscular : 'corpo_todo',
-    series: Number.isFinite(Number(ex?.series)) ? Math.max(1, Math.round(Number(ex.series))) : 3,
-    repeticoes: String(ex?.repeticoes || '12'),
-    descansoSegundos: Number.isFinite(Number(ex?.descansoSegundos)) ? Math.max(10, Math.round(Number(ex.descansoSegundos))) : 45,
-    descricao: String(ex?.descricao || ''),
-    completedSets: 0,
-  }));
-  return exercicios;
+  return (Array.isArray(exerciciosRaw) ? exerciciosRaw : []).map((ex) => {
+    const grupoMuscular = groups.has(ex?.grupoMuscular) ? ex.grupoMuscular : 'corpo_todo';
+    const series = Number.isFinite(Number(ex?.series)) ? Math.max(1, Math.round(Number(ex.series))) : 3;
+    return {
+      nome: String(ex?.nome || 'Exercício'),
+      grupoMuscular,
+      series,
+      repeticoes: String(ex?.repeticoes || '12'),
+      descansoSegundos: Number.isFinite(Number(ex?.descansoSegundos)) ? Math.max(10, Math.round(Number(ex.descansoSegundos))) : 45,
+      descricao: String(ex?.descricao || ''),
+      buscaImagem: String(ex?.buscaImagem || IMAGE_SEARCH_TERMS[grupoMuscular]),
+      sets: Array.from({ length: series }, () => ({ done: false, peso: null })),
+    };
+  });
 }
 
 function sanitizePlan(raw) {
@@ -137,7 +194,8 @@ async function generateWorkout(userPrompt, apiKey) {
           "series": number,
           "repeticoes": string,
           "descansoSegundos": number entre 20 e 120,
-          "descricao": string com 2 a 3 frases explicando como executar o movimento corretamente e pontos de atenção
+          "descricao": string com 2 a 3 frases explicando como executar o movimento corretamente e pontos de atenção,
+          "buscaImagem": string curta em inglês descrevendo o equipamento/movimento para busca de imagem (ex: "flat barbell bench press", "lat pulldown machine")
         }
       ]
     }
@@ -176,10 +234,6 @@ Se o usuário pedir uma divisão como "treino ABC", "ABCD" ou "dividido em N dia
   plan.id = `w_${Date.now()}`;
   plan.createdAt = new Date().toISOString();
   plan.diaAtivo = 0;
-
-  const allGroups = plan.dias.flatMap((dia) => dia.exercicios.map((ex) => ex.grupoMuscular));
-  await ensureGroupImages(allGroups);
-
   return plan;
 }
 
@@ -197,18 +251,31 @@ function showScreen(name) {
   screens[name].classList.remove('hidden');
 }
 
-// ---------- Configurações (chave API) ----------
+// ---------- Configurações: chave API, tema, som e vibração ----------
 const apiKeyInput = document.getElementById('apiKeyInput');
 const keyStatus = document.getElementById('keyStatus');
+const themeSegmented = document.getElementById('themeSegmented');
+const soundToggle = document.getElementById('soundToggle');
+const vibrationToggle = document.getElementById('vibrationToggle');
 
 function refreshKeyStatus() {
   const key = load(STORAGE_KEYS.apiKey, '');
   keyStatus.textContent = key ? 'Chave salva neste celular.' : 'Nenhuma chave configurada ainda.';
 }
 
+function refreshSettingsUI() {
+  const settings = loadSettings();
+  themeSegmented.querySelectorAll('.segmented-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.theme === settings.theme);
+  });
+  soundToggle.checked = settings.sound;
+  vibrationToggle.checked = settings.vibration;
+}
+
 document.getElementById('btnSettings').addEventListener('click', () => {
   apiKeyInput.value = load(STORAGE_KEYS.apiKey, '');
   refreshKeyStatus();
+  refreshSettingsUI();
   showScreen('settings');
 });
 document.getElementById('btnCloseSettings').addEventListener('click', () => renderCurrentOrGenerate());
@@ -218,12 +285,82 @@ document.getElementById('btnSaveKey').addEventListener('click', () => {
   refreshKeyStatus();
 });
 
-// ---------- Histórico ----------
+themeSegmented.querySelectorAll('.segmented-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const settings = loadSettings();
+    settings.theme = btn.dataset.theme;
+    save(STORAGE_KEYS.settings, settings);
+    applyTheme(settings.theme);
+    refreshSettingsUI();
+  });
+});
+soundToggle.addEventListener('change', () => {
+  const settings = loadSettings();
+  settings.sound = soundToggle.checked;
+  save(STORAGE_KEYS.settings, settings);
+});
+vibrationToggle.addEventListener('change', () => {
+  const settings = loadSettings();
+  settings.vibration = vibrationToggle.checked;
+  save(STORAGE_KEYS.settings, settings);
+});
+
+// ---------- Histórico: streak, calendário e planos ----------
+let calendarViewDate = new Date();
+
 document.getElementById('btnHistory').addEventListener('click', () => {
+  calendarViewDate = new Date();
+  renderStreak();
+  renderCalendar();
   renderHistory();
   showScreen('history');
 });
 document.getElementById('btnCloseHistory').addEventListener('click', () => renderCurrentOrGenerate());
+
+function renderStreak() {
+  const sessions = load(STORAGE_KEYS.sessions, []);
+  const streak = computeStreak(sessions);
+  document.getElementById('streakCount').textContent = streak === 1 ? '1 dia seguido' : `${streak} dias seguidos`;
+  document.getElementById('streakEmoji').textContent = streak > 0 ? '🔥' : '💤';
+}
+
+function renderCalendar() {
+  const sessions = new Set(load(STORAGE_KEYS.sessions, []));
+  const year = calendarViewDate.getFullYear();
+  const month = calendarViewDate.getMonth();
+
+  document.getElementById('calendarLabel').textContent = calendarViewDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+
+  const weekdaysEl = document.getElementById('calendarWeekdays');
+  weekdaysEl.innerHTML = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((d) => `<span>${d}</span>`).join('');
+
+  const firstDay = new Date(year, month, 1);
+  const startOffset = firstDay.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayKey = dateStr();
+
+  const grid = document.getElementById('calendarGrid');
+  grid.innerHTML = '';
+  for (let i = 0; i < startOffset; i++) {
+    grid.insertAdjacentHTML('beforeend', '<div class="calendar-day empty"></div>');
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = dateStr(new Date(year, month, day));
+    const classes = ['calendar-day'];
+    if (sessions.has(key)) classes.push('trained');
+    if (key === todayKey) classes.push('today');
+    grid.insertAdjacentHTML('beforeend', `<div class="${classes.join(' ')}">${day}</div>`);
+  }
+}
+
+document.getElementById('btnCalPrev').addEventListener('click', () => {
+  calendarViewDate.setMonth(calendarViewDate.getMonth() - 1);
+  renderCalendar();
+});
+document.getElementById('btnCalNext').addEventListener('click', () => {
+  calendarViewDate.setMonth(calendarViewDate.getMonth() + 1);
+  renderCalendar();
+});
 
 function renderHistory() {
   const history = load(STORAGE_KEYS.history, []);
@@ -272,12 +409,12 @@ document.getElementById('btnGenerate').addEventListener('click', async () => {
 
   showScreen('loading');
   try {
-    const workout = await generateWorkout(userPrompt, apiKey);
-    save(STORAGE_KEYS.current, workout);
+    const plan = await generateWorkout(userPrompt, apiKey);
+    save(STORAGE_KEYS.current, plan);
     const history = load(STORAGE_KEYS.history, []);
-    history.push(workout);
+    history.push(plan);
     save(STORAGE_KEYS.history, history);
-    renderWorkout(workout);
+    renderWorkout(plan);
     showScreen('workout');
   } catch (err) {
     showScreen('generate');
@@ -297,19 +434,21 @@ function showError(msg) {
   showScreen('generate');
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
+function syncPlanToHistory(plan) {
+  const history = load(STORAGE_KEYS.history, []);
+  const idx = history.findIndex((p) => p.id === plan.id);
+  if (idx !== -1) {
+    history[idx] = plan;
+    save(STORAGE_KEYS.history, history);
+  }
 }
 
 // ---------- Renderização do treino ----------
 function isDiaCompleto(dia) {
-  return dia.exercicios.every((ex) => ex.completedSets >= ex.series);
+  return dia.exercicios.every((ex) => ex.sets.every((s) => s.done));
 }
 
 function renderWorkout(plan) {
-  const imgCache = load(IMAGE_CACHE_KEY, {});
   const diaIdx = plan.diaAtivo || 0;
   const dia = plan.dias[diaIdx];
 
@@ -343,25 +482,27 @@ function renderWorkout(plan) {
 
   dia.exercicios.forEach((ex, idx) => {
     const card = document.createElement('div');
-    card.className = 'exercise-card' + (ex.completedSets >= ex.series ? ' done' : '');
+    card.className = 'exercise-card' + (ex.sets.every((s) => s.done) ? ' done' : '');
 
-    const setsRow = Array.from({ length: ex.series }, (_, i) => {
-      const filled = i < ex.completedSets;
-      return `<button class="check-btn set-btn${filled ? ' checked' : ''}" data-idx="${idx}" data-set="${i}">${filled ? '✓' : i + 1}ª série</button>`;
+    const setsRow = ex.sets.map((s, i) => {
+      const label = s.done ? (s.peso != null ? `✓ ${s.peso}kg` : '✓') : `${i + 1}ª série`;
+      return `<button class="check-btn set-btn${s.done ? ' checked' : ''}" data-idx="${idx}" data-set="${i}">${label}</button>`;
     }).join('');
 
-    const imgUrl = imgCache[ex.grupoMuscular];
-    const iconContent = imgUrl
-      ? `<img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(ex.grupoMuscular)}" loading="lazy" data-group="${escapeHtml(ex.grupoMuscular)}">`
-      : iconFor(ex.grupoMuscular);
-
     card.innerHTML = `
-      <div class="ex-icon">${iconContent}</div>
+      <div class="ex-icon">${iconFor(ex.grupoMuscular)}</div>
       <div class="ex-body">
-        <p class="ex-name">${escapeHtml(ex.nome)}</p>
+        <div class="ex-card-head">
+          <p class="ex-name">${escapeHtml(ex.nome)}</p>
+          <div>
+            <button class="ex-mini-btn edit-btn" data-idx="${idx}" aria-label="Editar">✏️</button>
+            <button class="ex-mini-btn danger remove-btn" data-idx="${idx}" aria-label="Remover">🗑️</button>
+          </div>
+        </div>
         <p class="ex-sets">${ex.series} séries × ${escapeHtml(ex.repeticoes)} · descanso ${ex.descansoSegundos}s</p>
         <p class="ex-desc">${escapeHtml(ex.descricao)}</p>
         <div class="ex-actions">${setsRow}</div>
+        <button class="exec-btn view-exec-btn" data-idx="${idx}">📷 Ver execução</button>
       </div>
     `;
     list.appendChild(card);
@@ -370,45 +511,208 @@ function renderWorkout(plan) {
   list.querySelectorAll('.set-btn').forEach((btn) => {
     btn.addEventListener('click', () => onSetClick(diaIdx, Number(btn.dataset.idx), Number(btn.dataset.set)));
   });
-
-  list.querySelectorAll('.ex-icon img').forEach((img) => {
-    img.addEventListener('error', () => {
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = iconFor(img.dataset.group);
-      img.replaceWith(wrapper.firstElementChild);
-    }, { once: true });
+  list.querySelectorAll('.edit-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openEditModal(diaIdx, Number(btn.dataset.idx)));
+  });
+  list.querySelectorAll('.remove-btn').forEach((btn) => {
+    btn.addEventListener('click', () => removeExercise(diaIdx, Number(btn.dataset.idx)));
+  });
+  list.querySelectorAll('.view-exec-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openExerciseImage(dia.exercicios[Number(btn.dataset.idx)]));
   });
 
   updateProgress(dia);
 }
 
 function updateProgress(dia) {
-  const total = dia.exercicios.reduce((sum, ex) => sum + ex.series, 0);
-  const done = dia.exercicios.reduce((sum, ex) => sum + ex.completedSets, 0);
+  const total = dia.exercicios.reduce((sum, ex) => sum + ex.sets.length, 0);
+  const done = dia.exercicios.reduce((sum, ex) => sum + ex.sets.filter((s) => s.done).length, 0);
   const pct = total ? Math.round((done / total) * 100) : 0;
   document.getElementById('progressFill').style.width = `${pct}%`;
 }
+
+// ---------- Marcar série (com registro de peso) ----------
+let pendingSet = null;
+const weightOverlay = document.getElementById('weightOverlay');
+const weightInput = document.getElementById('weightInput');
 
 function onSetClick(diaIdx, exIdx, setIdx) {
   const plan = load(STORAGE_KEYS.current, null);
   if (!plan) return;
   const ex = plan.dias[diaIdx].exercicios[exIdx];
+  const set = ex.sets[setIdx];
 
-  const alreadyDone = setIdx < ex.completedSets;
-  if (alreadyDone) {
-    // Desmarcar essa série e todas as posteriores dela
-    ex.completedSets = setIdx;
-  } else {
-    ex.completedSets = setIdx + 1;
-    const isLastSetOfExercise = ex.completedSets >= ex.series;
+  if (set.done) {
+    ex.sets.forEach((s, i) => {
+      if (i >= setIdx) {
+        s.done = false;
+        s.peso = null;
+      }
+    });
     save(STORAGE_KEYS.current, plan);
     renderWorkout(plan);
-    if (!isLastSetOfExercise) {
-      startRestTimer(ex.descansoSegundos, ex.nome);
-    }
     return;
   }
+
+  pendingSet = {
+    diaIdx,
+    exIdx,
+    setIdx,
+    nome: ex.nome,
+    descansoSegundos: ex.descansoSegundos,
+    isLast: setIdx + 1 >= ex.series,
+  };
+  document.getElementById('weightExerciseName').textContent = ex.nome;
+  const lastWeight = getLastWeight(ex.nome);
+  weightInput.value = lastWeight != null ? lastWeight : '';
+  weightOverlay.classList.remove('hidden');
+  weightInput.focus();
+}
+
+function completeSet(peso) {
+  if (!pendingSet) return;
+  const plan = load(STORAGE_KEYS.current, null);
+  if (!plan) {
+    pendingSet = null;
+    return;
+  }
+  const ex = plan.dias[pendingSet.diaIdx].exercicios[pendingSet.exIdx];
+  ex.sets[pendingSet.setIdx] = { done: true, peso };
+  if (peso != null) saveWeight(ex.nome, peso);
+  logSessionToday();
   save(STORAGE_KEYS.current, plan);
+
+  weightOverlay.classList.add('hidden');
+  const { descansoSegundos, nome, isLast } = pendingSet;
+  pendingSet = null;
+  renderWorkout(plan);
+  if (!isLast) startRestTimer(descansoSegundos, nome);
+}
+
+document.getElementById('btnWeightConfirm').addEventListener('click', () => {
+  const raw = weightInput.value.trim();
+  const peso = raw ? Number(raw) : null;
+  completeSet(Number.isFinite(peso) ? peso : null);
+});
+document.getElementById('btnWeightSkip').addEventListener('click', () => completeSet(null));
+weightInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('btnWeightConfirm').click();
+});
+
+// ---------- Ver execução (foto real do exercício) ----------
+const exerciseImageOverlay = document.getElementById('exerciseImageOverlay');
+
+function openExerciseImage(ex) {
+  document.getElementById('imageExerciseName').textContent = ex.nome;
+  document.getElementById('imageExerciseDesc').textContent = ex.descricao;
+  const body = document.getElementById('imageBody');
+  body.innerHTML = '<div class="spinner"></div>';
+  exerciseImageOverlay.classList.remove('hidden');
+
+  const term = ex.buscaImagem || IMAGE_SEARCH_TERMS[ex.grupoMuscular];
+  getOrFetchImage(term)
+    .then((url) => {
+      body.innerHTML = url
+        ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(ex.nome)}">`
+        : `<div class="image-fallback">${iconFor(ex.grupoMuscular)}<p class="muted small">Sem foto disponível para este exercício</p></div>`;
+    })
+    .catch(() => {
+      body.innerHTML = `<div class="image-fallback">${iconFor(ex.grupoMuscular)}<p class="muted small">Não foi possível carregar a foto</p></div>`;
+    });
+}
+
+document.getElementById('btnCloseImage').addEventListener('click', () => {
+  exerciseImageOverlay.classList.add('hidden');
+});
+
+// ---------- Editar / adicionar / remover exercício ----------
+let pendingEdit = null;
+const editExerciseOverlay = document.getElementById('editExerciseOverlay');
+
+function openEditModal(diaIdx, exIdx) {
+  const plan = load(STORAGE_KEYS.current, null);
+  if (!plan) return;
+  const dia = plan.dias[diaIdx];
+  const ex = exIdx != null ? dia.exercicios[exIdx] : null;
+  pendingEdit = { diaIdx, exIdx };
+
+  document.getElementById('editFormTitle').textContent = ex ? 'Editar exercício' : 'Adicionar exercício';
+  document.getElementById('editNome').value = ex?.nome || '';
+  document.getElementById('editGrupo').value = ex?.grupoMuscular || 'corpo_todo';
+  document.getElementById('editSeries').value = ex?.series || 3;
+  document.getElementById('editRepeticoes').value = ex?.repeticoes || '12';
+  document.getElementById('editDescanso').value = ex?.descansoSegundos || 60;
+  document.getElementById('editDescricao').value = ex?.descricao || '';
+
+  editExerciseOverlay.classList.remove('hidden');
+}
+
+document.getElementById('btnEditCancel').addEventListener('click', () => {
+  pendingEdit = null;
+  editExerciseOverlay.classList.add('hidden');
+});
+
+document.getElementById('btnEditSave').addEventListener('click', () => {
+  if (!pendingEdit) return;
+  const nomeInput = document.getElementById('editNome');
+  const nome = nomeInput.value.trim();
+  if (!nome) {
+    nomeInput.focus();
+    return;
+  }
+  const grupoMuscular = document.getElementById('editGrupo').value;
+  const series = Math.max(1, Math.round(Number(document.getElementById('editSeries').value) || 3));
+  const repeticoes = document.getElementById('editRepeticoes').value.trim() || '12';
+  const descansoSegundos = Math.max(10, Math.round(Number(document.getElementById('editDescanso').value) || 60));
+  const descricao = document.getElementById('editDescricao').value.trim();
+
+  const plan = load(STORAGE_KEYS.current, null);
+  if (!plan) return;
+  const dia = plan.dias[pendingEdit.diaIdx];
+  const existing = pendingEdit.exIdx != null ? dia.exercicios[pendingEdit.exIdx] : null;
+
+  const sets = Array.from({ length: series }, (_, i) => (existing?.sets[i]) || { done: false, peso: null });
+
+  const novoEx = {
+    nome,
+    grupoMuscular,
+    series,
+    repeticoes,
+    descansoSegundos,
+    descricao,
+    buscaImagem: existing?.buscaImagem || IMAGE_SEARCH_TERMS[grupoMuscular],
+    sets,
+  };
+
+  if (pendingEdit.exIdx != null) {
+    dia.exercicios[pendingEdit.exIdx] = novoEx;
+  } else {
+    dia.exercicios.push(novoEx);
+  }
+
+  save(STORAGE_KEYS.current, plan);
+  syncPlanToHistory(plan);
+  pendingEdit = null;
+  editExerciseOverlay.classList.add('hidden');
+  renderWorkout(plan);
+});
+
+document.getElementById('btnAddExercise').addEventListener('click', () => {
+  const plan = load(STORAGE_KEYS.current, null);
+  if (!plan) return;
+  openEditModal(plan.diaAtivo || 0, null);
+});
+
+function removeExercise(diaIdx, exIdx) {
+  const plan = load(STORAGE_KEYS.current, null);
+  if (!plan) return;
+  const dia = plan.dias[diaIdx];
+  const ex = dia.exercicios[exIdx];
+  if (!confirm(`Remover "${ex.nome}" deste treino?`)) return;
+
+  dia.exercicios.splice(exIdx, 1);
+  save(STORAGE_KEYS.current, plan);
+  syncPlanToHistory(plan);
   renderWorkout(plan);
 }
 
@@ -446,8 +750,9 @@ function startRestTimer(seconds, exerciseName) {
 function finishRestTimer() {
   clearInterval(timerInterval);
   timerDisplay.textContent = '00:00';
-  playBeep();
-  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  const settings = loadSettings();
+  if (settings.sound) playBeep();
+  if (settings.vibration && navigator.vibrate) navigator.vibrate([200, 100, 200]);
   setTimeout(() => timerOverlay.classList.add('hidden'), 600);
 }
 

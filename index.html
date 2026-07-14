@@ -24,9 +24,9 @@
 
 <main id="app">
 
-  <!-- Tela: Configuração da chave -->
+  <!-- Tela: Configurações -->
   <section id="screenSettings" class="screen hidden">
-    <h2>Configuração da IA</h2>
+    <h2>Configurações</h2>
     <p class="muted">
       Este app usa a Groq gratuitamente para gerar seus treinos.
       Crie sua chave grátis (sem cartão) em
@@ -38,13 +38,53 @@
       <input id="apiKeyInput" type="password" placeholder="gsk_..." autocomplete="off" spellcheck="false">
     </label>
     <button id="btnSaveKey" class="btn primary">Salvar chave</button>
-    <button id="btnCloseSettings" class="btn ghost">Voltar</button>
     <p id="keyStatus" class="muted small"></p>
+
+    <div class="settings-divider"></div>
+
+    <label class="field">
+      <span>Tema</span>
+      <div class="segmented" id="themeSegmented">
+        <button type="button" class="segmented-btn" data-theme="dark">Escuro</button>
+        <button type="button" class="segmented-btn" data-theme="light">Claro</button>
+      </div>
+    </label>
+
+    <label class="toggle-row">
+      <span>Som no fim do descanso</span>
+      <input type="checkbox" id="soundToggle">
+    </label>
+    <label class="toggle-row">
+      <span>Vibração no fim do descanso</span>
+      <input type="checkbox" id="vibrationToggle">
+    </label>
+
+    <button id="btnCloseSettings" class="btn ghost">Voltar</button>
   </section>
 
   <!-- Tela: Histórico -->
   <section id="screenHistory" class="screen hidden">
-    <h2>Treinos anteriores</h2>
+    <h2>Seu progresso</h2>
+
+    <div class="streak-card">
+      <span id="streakEmoji" class="streak-emoji">🔥</span>
+      <div>
+        <p id="streakCount" class="streak-count">0 dias seguidos</p>
+        <p class="muted small">Treine hoje para manter a sequência</p>
+      </div>
+    </div>
+
+    <div class="calendar-card">
+      <div class="calendar-head">
+        <button id="btnCalPrev" class="icon-btn small" aria-label="Mês anterior">‹</button>
+        <span id="calendarLabel" class="calendar-label"></span>
+        <button id="btnCalNext" class="icon-btn small" aria-label="Próximo mês">›</button>
+      </div>
+      <div id="calendarWeekdays" class="calendar-weekdays"></div>
+      <div id="calendarGrid" class="calendar-grid"></div>
+    </div>
+
+    <h3 class="section-title">Planos gerados</h3>
     <div id="historyList" class="history-list"></div>
     <p id="historyEmpty" class="muted">Nenhum treino gerado ainda.</p>
     <button id="btnCloseHistory" class="btn ghost">Voltar</button>
@@ -73,6 +113,7 @@
       <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
     </div>
     <div id="exerciseList" class="exercise-list"></div>
+    <button id="btnAddExercise" class="btn ghost">+ Adicionar exercício</button>
     <button id="btnNewWorkout" class="btn ghost">+ Novo treino</button>
   </section>
 
@@ -89,6 +130,74 @@
       <button id="btnTimerSkip" class="btn primary">Pular</button>
       <button id="btnTimerPlus" class="btn ghost small-btn">+10s</button>
     </div>
+  </div>
+</div>
+
+<!-- Overlay: Peso da série -->
+<div id="weightOverlay" class="overlay hidden">
+  <div class="timer-card">
+    <p class="muted">Quanto peso você usou?</p>
+    <p id="weightExerciseName" class="weight-exercise-name"></p>
+    <input id="weightInput" class="weight-input" type="number" inputmode="decimal" step="0.5" min="0" placeholder="kg">
+    <div class="timer-actions">
+      <button id="btnWeightSkip" class="btn ghost small-btn">Sem peso</button>
+      <button id="btnWeightConfirm" class="btn primary">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Overlay: Ver execução do exercício -->
+<div id="exerciseImageOverlay" class="overlay hidden">
+  <div class="image-card">
+    <button id="btnCloseImage" class="icon-btn image-close" aria-label="Fechar">✕</button>
+    <h3 id="imageExerciseName"></h3>
+    <div id="imageBody" class="image-body"></div>
+    <p id="imageExerciseDesc" class="muted small"></p>
+  </div>
+</div>
+
+<!-- Overlay: Adicionar/editar exercício -->
+<div id="editExerciseOverlay" class="overlay hidden">
+  <div class="edit-card">
+    <h3 id="editFormTitle">Editar exercício</h3>
+    <label class="field">
+      <span>Nome</span>
+      <input id="editNome" type="text" placeholder="Ex: Supino Reto">
+    </label>
+    <label class="field">
+      <span>Grupo muscular</span>
+      <select id="editGrupo">
+        <option value="peito">Peito</option>
+        <option value="costas">Costas</option>
+        <option value="pernas">Pernas</option>
+        <option value="ombros">Ombros</option>
+        <option value="biceps">Bíceps</option>
+        <option value="triceps">Tríceps</option>
+        <option value="abdomen">Abdômen</option>
+        <option value="cardio">Cardio</option>
+        <option value="corpo_todo">Corpo todo</option>
+      </select>
+    </label>
+    <div class="field-row">
+      <label class="field">
+        <span>Séries</span>
+        <input id="editSeries" type="number" min="1" max="10" value="3">
+      </label>
+      <label class="field">
+        <span>Repetições</span>
+        <input id="editRepeticoes" type="text" placeholder="Ex: 10-12">
+      </label>
+    </div>
+    <label class="field">
+      <span>Descanso (segundos)</span>
+      <input id="editDescanso" type="number" min="10" max="300" value="60">
+    </label>
+    <label class="field">
+      <span>Descrição de execução</span>
+      <textarea id="editDescricao" rows="3" placeholder="Como executar o movimento..."></textarea>
+    </label>
+    <button id="btnEditSave" class="btn primary">Salvar</button>
+    <button id="btnEditCancel" class="btn ghost">Cancelar</button>
   </div>
 </div>
 
