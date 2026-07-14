@@ -53,7 +53,7 @@
   <!-- Tela: Gerar treino -->
   <section id="screenGenerate" class="screen">
     <h2>Descreva o treino que você quer</h2>
-    <textarea id="workoutPrompt" rows="4" placeholder="Ex: treino de pernas, 40 minutos, nível iniciante, sem equipamentos, foco em quadríceps e glúteos"></textarea>
+    <textarea id="workoutPrompt" rows="4" placeholder="Ex: treino ABC para hipertrofia, 3x por semana, nível intermediário&#10;ou: treino de pernas de hoje, 40 minutos, iniciante"></textarea>
     <button id="btnGenerate" class="btn primary">✨ Gerar treino com IA</button>
     <p id="generateError" class="error hidden"></p>
   </section>
@@ -68,6 +68,7 @@
   <section id="screenWorkout" class="screen hidden">
     <div class="workout-head">
       <h2 id="workoutTitle">Treino</h2>
+      <div id="dayTabs" class="day-tabs hidden"></div>
       <p id="workoutMeta" class="muted small"></p>
       <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
     </div>

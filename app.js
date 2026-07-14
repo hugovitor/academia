@@ -29,6 +29,51 @@ const ICONS = {
 };
 const iconFor = (group) => ICONS[group] || ICONS.corpo_todo;
 
+// ---------- Imagens reais de aparelhos (Wikimedia Commons, sem chave) ----------
+const IMAGE_SEARCH_TERMS = {
+  peito: 'bench press exercise gym',
+  costas: 'lat pulldown machine gym',
+  pernas: 'leg press machine gym',
+  ombros: 'shoulder press machine gym',
+  biceps: 'bicep curl dumbbell gym',
+  triceps: 'triceps pushdown cable machine gym',
+  abdomen: 'abdominal crunch machine gym',
+  cardio: 'treadmill gym cardio',
+  corpo_todo: 'gym weight equipment',
+};
+const IMAGE_CACHE_KEY = 'treinoia_img_cache';
+
+async function fetchGroupImage(group) {
+  const term = IMAGE_SEARCH_TERMS[group] || IMAGE_SEARCH_TERMS.corpo_todo;
+  const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(term + ' filetype:bitmap')}&gsrlimit=1&gsrnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=300&format=json&origin=*`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const pages = data?.query?.pages;
+  if (!pages) return null;
+  const page = Object.values(pages)[0];
+  return page?.imageinfo?.[0]?.thumburl || null;
+}
+
+async function ensureGroupImages(groups) {
+  const cache = load(IMAGE_CACHE_KEY, {});
+  const missing = [...new Set(groups)].filter((g) => !cache[g]);
+  if (!missing.length) return cache;
+
+  await Promise.all(
+    missing.map(async (group) => {
+      try {
+        const imgUrl = await fetchGroupImage(group);
+        if (imgUrl) cache[group] = imgUrl;
+      } catch {
+        /* sem internet ou API indisponível: mantém o ícone local */
+      }
+    })
+  );
+  save(IMAGE_CACHE_KEY, cache);
+  return cache;
+}
+
 // ---------- Geração via Groq (API compatível com OpenAI) ----------
 const GROQ_GROUPS = ['peito', 'costas', 'pernas', 'ombros', 'biceps', 'triceps', 'abdomen', 'cardio', 'corpo_todo'];
 
@@ -38,10 +83,9 @@ function stripCodeFence(text) {
   return match ? match[1] : trimmed;
 }
 
-function sanitizeWorkout(raw) {
+function sanitizeExercicios(exerciciosRaw) {
   const groups = new Set(GROQ_GROUPS);
-  const exerciciosRaw = Array.isArray(raw?.exercicios) ? raw.exercicios : [];
-  const exercicios = exerciciosRaw.map((ex) => ({
+  const exercicios = (Array.isArray(exerciciosRaw) ? exerciciosRaw : []).map((ex) => ({
     nome: String(ex?.nome || 'Exercício'),
     grupoMuscular: groups.has(ex?.grupoMuscular) ? ex.grupoMuscular : 'corpo_todo',
     series: Number.isFinite(Number(ex?.series)) ? Math.max(1, Math.round(Number(ex.series))) : 3,
@@ -50,12 +94,27 @@ function sanitizeWorkout(raw) {
     descricao: String(ex?.descricao || ''),
     completedSets: 0,
   }));
-  if (!exercicios.length) throw new Error('A IA não retornou nenhum exercício. Tente descrever o treino de outra forma.');
+  return exercicios;
+}
+
+function sanitizePlan(raw) {
+  const diasRaw = Array.isArray(raw?.dias) && raw.dias.length ? raw.dias : [{ letra: 'A', foco: raw?.nomeTreino, duracaoEstimadaMin: raw?.duracaoEstimadaMin, exercicios: raw?.exercicios }];
+
+  const dias = diasRaw.map((dia, idx) => {
+    const exercicios = sanitizeExercicios(dia?.exercicios);
+    return {
+      letra: String(dia?.letra || String.fromCharCode(65 + idx)),
+      foco: String(dia?.foco || ''),
+      duracaoEstimadaMin: Number.isFinite(Number(dia?.duracaoEstimadaMin)) ? Math.round(Number(dia.duracaoEstimadaMin)) : 30,
+      exercicios,
+    };
+  }).filter((dia) => dia.exercicios.length);
+
+  if (!dias.length) throw new Error('A IA não retornou nenhum exercício. Tente descrever o treino de outra forma.');
 
   return {
-    nomeTreino: String(raw?.nomeTreino || 'Treino'),
-    duracaoEstimadaMin: Number.isFinite(Number(raw?.duracaoEstimadaMin)) ? Math.round(Number(raw.duracaoEstimadaMin)) : 30,
-    exercicios,
+    nomePlano: String(raw?.nomePlano || raw?.nomeTreino || 'Treino'),
+    dias,
   };
 }
 
@@ -65,19 +124,26 @@ async function generateWorkout(userPrompt, apiKey) {
 
   const systemPrompt = `Você é um personal trainer. Responda APENAS com um JSON válido (sem markdown, sem texto fora do JSON) no formato exato:
 {
-  "nomeTreino": string,
-  "duracaoEstimadaMin": number,
-  "exercicios": [
+  "nomePlano": string (nome geral do plano, ex: "Treino ABC - Hipertrofia"),
+  "dias": [
     {
-      "nome": string,
-      "grupoMuscular": um destes valores exatos: ${GROQ_GROUPS.map((g) => `"${g}"`).join(' | ')},
-      "series": number,
-      "repeticoes": string,
-      "descansoSegundos": number entre 20 e 120,
-      "descricao": string com 2 a 3 frases explicando como executar o movimento corretamente e pontos de atenção
+      "letra": string (ex: "A", "B", "C" — use apenas 1 dia com letra "A" se o pedido do usuário não indicar uma divisão em múltiplos dias),
+      "foco": string (grupos musculares trabalhados nesse dia, ex: "Peito, Ombro e Tríceps"),
+      "duracaoEstimadaMin": number,
+      "exercicios": [
+        {
+          "nome": string,
+          "grupoMuscular": um destes valores exatos: ${GROQ_GROUPS.map((g) => `"${g}"`).join(' | ')},
+          "series": number,
+          "repeticoes": string,
+          "descansoSegundos": number entre 20 e 120,
+          "descricao": string com 2 a 3 frases explicando como executar o movimento corretamente e pontos de atenção
+        }
+      ]
     }
   ]
-}`;
+}
+Se o usuário pedir uma divisão como "treino ABC", "ABCD" ou "dividido em N dias", gere exatamente esse número de dias, cada um com foco muscular diferente e sem repetir os mesmos exercícios entre os dias. Se o pedido for um treino único (ex: "treino de pernas de hoje"), gere apenas 1 dia com letra "A".`;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -106,10 +172,15 @@ async function generateWorkout(userPrompt, apiKey) {
   const text = data?.choices?.[0]?.message?.content;
   if (!text) throw new Error('A IA não retornou um treino válido. Tente novamente.');
 
-  const workout = sanitizeWorkout(JSON.parse(stripCodeFence(text)));
-  workout.id = `w_${Date.now()}`;
-  workout.createdAt = new Date().toISOString();
-  return workout;
+  const plan = sanitizePlan(JSON.parse(stripCodeFence(text)));
+  plan.id = `w_${Date.now()}`;
+  plan.createdAt = new Date().toISOString();
+  plan.diaAtivo = 0;
+
+  const allGroups = plan.dias.flatMap((dia) => dia.exercicios.map((ex) => ex.grupoMuscular));
+  await ensureGroupImages(allGroups);
+
+  return plan;
 }
 
 // ---------- Navegação de telas ----------
@@ -164,14 +235,17 @@ function renderHistory() {
   history
     .slice()
     .reverse()
-    .forEach((w) => {
+    .forEach((plan) => {
       const btn = document.createElement('button');
       btn.className = 'history-item';
-      const date = new Date(w.createdAt);
-      btn.innerHTML = `<b>${escapeHtml(w.nomeTreino)}</b><span>${date.toLocaleDateString('pt-BR')} · ${w.exercicios.length} exercícios · ~${w.duracaoEstimadaMin} min</span>`;
+      const date = new Date(plan.createdAt);
+      const totalExercicios = plan.dias.reduce((sum, d) => sum + d.exercicios.length, 0);
+      const diasLabel = plan.dias.length > 1 ? `${plan.dias.length} dias (${plan.dias.map((d) => d.letra).join('/')})` : '1 dia';
+      btn.innerHTML = `<b>${escapeHtml(plan.nomePlano)}</b><span>${date.toLocaleDateString('pt-BR')} · ${diasLabel} · ${totalExercicios} exercícios</span>`;
       btn.addEventListener('click', () => {
-        save(STORAGE_KEYS.current, w);
-        renderWorkout(w);
+        plan.diaAtivo = 0;
+        save(STORAGE_KEYS.current, plan);
+        renderWorkout(plan);
         showScreen('workout');
       });
       list.appendChild(btn);
@@ -230,14 +304,44 @@ function escapeHtml(str) {
 }
 
 // ---------- Renderização do treino ----------
-function renderWorkout(workout) {
-  document.getElementById('workoutTitle').textContent = workout.nomeTreino;
-  document.getElementById('workoutMeta').textContent = `${workout.exercicios.length} exercícios · ~${workout.duracaoEstimadaMin} min`;
+function isDiaCompleto(dia) {
+  return dia.exercicios.every((ex) => ex.completedSets >= ex.series);
+}
+
+function renderWorkout(plan) {
+  const imgCache = load(IMAGE_CACHE_KEY, {});
+  const diaIdx = plan.diaAtivo || 0;
+  const dia = plan.dias[diaIdx];
+
+  document.getElementById('workoutTitle').textContent = plan.nomePlano;
+
+  const dayTabs = document.getElementById('dayTabs');
+  dayTabs.innerHTML = '';
+  if (plan.dias.length > 1) {
+    dayTabs.classList.remove('hidden');
+    plan.dias.forEach((d, idx) => {
+      const tab = document.createElement('button');
+      tab.className = 'day-tab' + (idx === diaIdx ? ' active' : '') + (isDiaCompleto(d) ? ' complete' : '');
+      tab.textContent = `Treino ${d.letra}${isDiaCompleto(d) ? ' ✓' : ''}`;
+      tab.addEventListener('click', () => {
+        plan.diaAtivo = idx;
+        save(STORAGE_KEYS.current, plan);
+        renderWorkout(plan);
+      });
+      dayTabs.appendChild(tab);
+    });
+  } else {
+    dayTabs.classList.add('hidden');
+  }
+
+  document.getElementById('workoutMeta').textContent = dia.foco
+    ? `${dia.foco} · ${dia.exercicios.length} exercícios · ~${dia.duracaoEstimadaMin} min`
+    : `${dia.exercicios.length} exercícios · ~${dia.duracaoEstimadaMin} min`;
 
   const list = document.getElementById('exerciseList');
   list.innerHTML = '';
 
-  workout.exercicios.forEach((ex, idx) => {
+  dia.exercicios.forEach((ex, idx) => {
     const card = document.createElement('div');
     card.className = 'exercise-card' + (ex.completedSets >= ex.series ? ' done' : '');
 
@@ -246,8 +350,13 @@ function renderWorkout(workout) {
       return `<button class="check-btn set-btn${filled ? ' checked' : ''}" data-idx="${idx}" data-set="${i}">${filled ? '✓' : i + 1}ª série</button>`;
     }).join('');
 
+    const imgUrl = imgCache[ex.grupoMuscular];
+    const iconContent = imgUrl
+      ? `<img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(ex.grupoMuscular)}" loading="lazy" data-group="${escapeHtml(ex.grupoMuscular)}">`
+      : iconFor(ex.grupoMuscular);
+
     card.innerHTML = `
-      <div class="ex-icon">${iconFor(ex.grupoMuscular)}</div>
+      <div class="ex-icon">${iconContent}</div>
       <div class="ex-body">
         <p class="ex-name">${escapeHtml(ex.nome)}</p>
         <p class="ex-sets">${ex.series} séries × ${escapeHtml(ex.repeticoes)} · descanso ${ex.descansoSegundos}s</p>
@@ -259,23 +368,31 @@ function renderWorkout(workout) {
   });
 
   list.querySelectorAll('.set-btn').forEach((btn) => {
-    btn.addEventListener('click', () => onSetClick(Number(btn.dataset.idx), Number(btn.dataset.set)));
+    btn.addEventListener('click', () => onSetClick(diaIdx, Number(btn.dataset.idx), Number(btn.dataset.set)));
   });
 
-  updateProgress(workout);
+  list.querySelectorAll('.ex-icon img').forEach((img) => {
+    img.addEventListener('error', () => {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = iconFor(img.dataset.group);
+      img.replaceWith(wrapper.firstElementChild);
+    }, { once: true });
+  });
+
+  updateProgress(dia);
 }
 
-function updateProgress(workout) {
-  const total = workout.exercicios.reduce((sum, ex) => sum + ex.series, 0);
-  const done = workout.exercicios.reduce((sum, ex) => sum + ex.completedSets, 0);
+function updateProgress(dia) {
+  const total = dia.exercicios.reduce((sum, ex) => sum + ex.series, 0);
+  const done = dia.exercicios.reduce((sum, ex) => sum + ex.completedSets, 0);
   const pct = total ? Math.round((done / total) * 100) : 0;
   document.getElementById('progressFill').style.width = `${pct}%`;
 }
 
-function onSetClick(exIdx, setIdx) {
-  const workout = load(STORAGE_KEYS.current, null);
-  if (!workout) return;
-  const ex = workout.exercicios[exIdx];
+function onSetClick(diaIdx, exIdx, setIdx) {
+  const plan = load(STORAGE_KEYS.current, null);
+  if (!plan) return;
+  const ex = plan.dias[diaIdx].exercicios[exIdx];
 
   const alreadyDone = setIdx < ex.completedSets;
   if (alreadyDone) {
@@ -284,15 +401,15 @@ function onSetClick(exIdx, setIdx) {
   } else {
     ex.completedSets = setIdx + 1;
     const isLastSetOfExercise = ex.completedSets >= ex.series;
-    save(STORAGE_KEYS.current, workout);
-    renderWorkout(workout);
+    save(STORAGE_KEYS.current, plan);
+    renderWorkout(plan);
     if (!isLastSetOfExercise) {
       startRestTimer(ex.descansoSegundos, ex.nome);
     }
     return;
   }
-  save(STORAGE_KEYS.current, workout);
-  renderWorkout(workout);
+  save(STORAGE_KEYS.current, plan);
+  renderWorkout(plan);
 }
 
 // ---------- Cronômetro de descanso ----------
