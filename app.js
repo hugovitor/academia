@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   settings: 'treinoia_settings',
   weights: 'treinoia_weights',
   sessions: 'treinoia_sessions',
+  profile: 'treinoia_profile',
 };
 
 const load = (key, fallback) => {
@@ -201,7 +202,8 @@ async function generateWorkout(userPrompt, apiKey) {
     }
   ]
 }
-Se o usuário pedir uma divisão como "treino ABC", "ABCD" ou "dividido em N dias", gere exatamente esse número de dias, cada um com foco muscular diferente e sem repetir os mesmos exercícios entre os dias. Se o pedido for um treino único (ex: "treino de pernas de hoje"), gere apenas 1 dia com letra "A".`;
+A frequência semanal informada no perfil da pessoa define quantos dias (letras) o plano deve ter: gere exatamente esse número de dias, cada um com foco muscular diferente e sem repetir os mesmos exercícios entre os dias. Se a frequência for de 1x por semana, gere apenas 1 dia com letra "A".
+Leve em conta o perfil completo (objetivo, nível, altura, peso, se treina sozinho ou acompanhado, e principalmente dores/lesões relatadas) para ajustar séries, repetições e escolher exercícios seguros e adequados.`;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -213,7 +215,7 @@ Se o usuário pedir uma divisão como "treino ABC", "ABCD" ou "dividido em N dia
       model,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Monte um treino de academia em português para o seguinte pedido: "${userPrompt}"` },
+        { role: 'user', content: `Monte um treino de academia em português para esta pessoa:\n${userPrompt}` },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.7,
@@ -389,23 +391,120 @@ function renderHistory() {
     });
 }
 
-// ---------- Geração de treino ----------
-const promptInput = document.getElementById('workoutPrompt');
+// ---------- Formulário de perfil (substitui a descrição livre) ----------
 const generateError = document.getElementById('generateError');
 
+function setSegmentedActive(containerId, value) {
+  document.querySelectorAll(`#${containerId} .segmented-btn`).forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.value === value);
+  });
+}
+function selectedSegmentedValue(containerId) {
+  return document.querySelector(`#${containerId} .segmented-btn.active`)?.dataset.value || null;
+}
+function wireSegmented(containerId) {
+  document.querySelectorAll(`#${containerId} .segmented-btn`).forEach((btn) => {
+    btn.addEventListener('click', () => setSegmentedActive(containerId, btn.dataset.value));
+  });
+}
+wireSegmented('formNivel');
+wireSegmented('formCompanhia');
+
+document.querySelectorAll('#formDores .checkbox-chip input').forEach((cb) => {
+  cb.addEventListener('change', () => cb.closest('.checkbox-chip').classList.toggle('active', cb.checked));
+});
+
+const DOR_LABELS = {
+  joelho: 'Joelho',
+  ombro: 'Ombro',
+  lombar: 'Lombar / coluna',
+  punho: 'Punho',
+  cotovelo: 'Cotovelo',
+  tornozelo: 'Tornozelo',
+  pescoco: 'Pescoço',
+};
+
+function readProfileFromForm() {
+  return {
+    objetivo: document.getElementById('formObjetivo').value,
+    nivel: selectedSegmentedValue('formNivel') || 'iniciante',
+    altura: document.getElementById('formAltura').value.trim(),
+    peso: document.getElementById('formPeso').value.trim(),
+    dias: document.getElementById('formDias').value,
+    duracao: document.getElementById('formDuracao').value,
+    companhia: selectedSegmentedValue('formCompanhia') || 'sozinho',
+    dores: Array.from(document.querySelectorAll('#formDores input:checked')).map((cb) => cb.value),
+    obs: document.getElementById('formObs').value.trim(),
+  };
+}
+
+function prefillForm() {
+  const profile = load(STORAGE_KEYS.profile, {});
+  document.getElementById('formObjetivo').value = profile.objetivo || 'hipertrofia';
+  setSegmentedActive('formNivel', profile.nivel || 'iniciante');
+  document.getElementById('formAltura').value = profile.altura || '';
+  document.getElementById('formPeso').value = profile.peso || '';
+  document.getElementById('formDias').value = profile.dias || '3';
+  document.getElementById('formDuracao').value = profile.duracao || '45';
+  setSegmentedActive('formCompanhia', profile.companhia || 'sozinho');
+  const dores = new Set(profile.dores || []);
+  document.querySelectorAll('#formDores .checkbox-chip input').forEach((cb) => {
+    cb.checked = dores.has(cb.value);
+    cb.closest('.checkbox-chip').classList.toggle('active', cb.checked);
+  });
+  document.getElementById('formObs').value = profile.obs || '';
+}
+
+const OBJETIVO_LABELS = {
+  hipertrofia: 'Hipertrofia (ganho de massa muscular)',
+  emagrecimento: 'Emagrecimento',
+  condicionamento: 'Condicionamento físico geral',
+  forca: 'Ganho de força',
+  definicao: 'Definição muscular',
+};
+const NIVEL_LABELS = { iniciante: 'Iniciante', intermediario: 'Intermediário', avancado: 'Avançado' };
+const DIAS_LABELS = {
+  1: '1x por semana (treino único)',
+  2: '2x por semana (divisão AB)',
+  3: '3x por semana (divisão ABC)',
+  4: '4x por semana (divisão ABCD)',
+  5: '5x por semana (divisão ABCDE)',
+  6: '6x por semana (divisão ABCDEF)',
+};
+
+function buildPromptFromProfile(profile) {
+  const linhas = [
+    `Objetivo: ${OBJETIVO_LABELS[profile.objetivo] || profile.objetivo}`,
+    `Nível: ${NIVEL_LABELS[profile.nivel] || profile.nivel}`,
+    `Frequência: ${DIAS_LABELS[profile.dias] || `${profile.dias}x por semana`}`,
+    `Duração desejada por sessão: ~${profile.duracao} minutos`,
+    `Vai treinar: ${profile.companhia === 'dupla' ? 'acompanhado(a) de outra pessoa' : 'sozinho(a)'}`,
+  ];
+  if (profile.altura) linhas.push(`Altura: ${profile.altura} cm`);
+  if (profile.peso) linhas.push(`Peso: ${profile.peso} kg`);
+  if (profile.dores.length) {
+    const dorLabels = profile.dores.map((d) => DOR_LABELS[d] || d).join(', ');
+    linhas.push(`Dores ou lesões relatadas: ${dorLabels}. Evite ou adapte exercícios que sobrecarreguem essas áreas e explique a adaptação na descrição quando relevante.`);
+  } else {
+    linhas.push('Sem dores ou lesões relatadas.');
+  }
+  if (profile.obs) linhas.push(`Observações adicionais: ${profile.obs}`);
+
+  return linhas.join('\n');
+}
+
 document.getElementById('btnGenerate').addEventListener('click', async () => {
-  const userPrompt = promptInput.value.trim();
   generateError.classList.add('hidden');
 
-  if (!userPrompt) {
-    showError('Descreva o treino que você quer antes de gerar.');
-    return;
-  }
   const apiKey = load(STORAGE_KEYS.apiKey, '');
   if (!apiKey) {
     showError('Configure sua chave gratuita da Groq em ⚙️ Configurações antes de gerar um treino.');
     return;
   }
+
+  const profile = readProfileFromForm();
+  save(STORAGE_KEYS.profile, profile);
+  const userPrompt = buildPromptFromProfile(profile);
 
   showScreen('loading');
   try {
@@ -423,8 +522,8 @@ document.getElementById('btnGenerate').addEventListener('click', async () => {
 });
 
 document.getElementById('btnNewWorkout').addEventListener('click', () => {
-  promptInput.value = '';
   generateError.classList.add('hidden');
+  prefillForm();
   showScreen('generate');
 });
 
@@ -794,6 +893,7 @@ function renderCurrentOrGenerate() {
     renderWorkout(current);
     showScreen('workout');
   } else {
+    prefillForm();
     showScreen('generate');
   }
 }

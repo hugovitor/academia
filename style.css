@@ -425,6 +425,34 @@ body.theme-light .segmented-btn.active { color: #ffffff; }
   accent-color: var(--accent);
 }
 
+.checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.checkbox-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: normal;
+  margin: 0;
+}
+.checkbox-chip input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+.checkbox-chip.active {
+  border-color: var(--accent);
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--accent);
+}
+
 /* ---------- Histórico: streak e calendário ---------- */
 .streak-card {
   display: flex;

@@ -92,8 +92,88 @@
 
   <!-- Tela: Gerar treino -->
   <section id="screenGenerate" class="screen">
-    <h2>Descreva o treino que você quer</h2>
-    <textarea id="workoutPrompt" rows="4" placeholder="Ex: treino ABC para hipertrofia, 3x por semana, nível intermediário&#10;ou: treino de pernas de hoje, 40 minutos, iniciante"></textarea>
+    <h2>Monte seu perfil de treino</h2>
+
+    <label class="field">
+      <span>Objetivo</span>
+      <select id="formObjetivo">
+        <option value="hipertrofia">Hipertrofia (ganho de massa)</option>
+        <option value="emagrecimento">Emagrecimento</option>
+        <option value="condicionamento">Condicionamento físico</option>
+        <option value="forca">Força</option>
+        <option value="definicao">Definição muscular</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Nível</span>
+      <div class="segmented" id="formNivel">
+        <button type="button" class="segmented-btn" data-value="iniciante">Iniciante</button>
+        <button type="button" class="segmented-btn" data-value="intermediario">Intermediário</button>
+        <button type="button" class="segmented-btn" data-value="avancado">Avançado</button>
+      </div>
+    </label>
+
+    <div class="field-row">
+      <label class="field">
+        <span>Altura (cm)</span>
+        <input id="formAltura" type="number" inputmode="numeric" min="100" max="250" placeholder="Ex: 175">
+      </label>
+      <label class="field">
+        <span>Peso (kg)</span>
+        <input id="formPeso" type="number" inputmode="decimal" min="30" max="300" step="0.5" placeholder="Ex: 78">
+      </label>
+    </div>
+
+    <div class="field-row">
+      <label class="field">
+        <span>Dias por semana</span>
+        <select id="formDias">
+          <option value="1">1x (treino único)</option>
+          <option value="2">2x (divisão AB)</option>
+          <option value="3">3x (divisão ABC)</option>
+          <option value="4">4x (divisão ABCD)</option>
+          <option value="5">5x (divisão ABCDE)</option>
+          <option value="6">6x (divisão ABCDEF)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Duração por treino</span>
+        <select id="formDuracao">
+          <option value="30">~30 min</option>
+          <option value="45">~45 min</option>
+          <option value="60">~60 min</option>
+          <option value="90">~90 min</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Você vai treinar...</span>
+      <div class="segmented" id="formCompanhia">
+        <button type="button" class="segmented-btn" data-value="sozinho">Sozinho(a)</button>
+        <button type="button" class="segmented-btn" data-value="dupla">Com alguém</button>
+      </div>
+    </label>
+
+    <label class="field">
+      <span>Sente dor ou tem lesão em algum lugar?</span>
+      <div class="checkbox-grid" id="formDores">
+        <label class="checkbox-chip"><input type="checkbox" value="joelho"> Joelho</label>
+        <label class="checkbox-chip"><input type="checkbox" value="ombro"> Ombro</label>
+        <label class="checkbox-chip"><input type="checkbox" value="lombar"> Lombar / coluna</label>
+        <label class="checkbox-chip"><input type="checkbox" value="punho"> Punho</label>
+        <label class="checkbox-chip"><input type="checkbox" value="cotovelo"> Cotovelo</label>
+        <label class="checkbox-chip"><input type="checkbox" value="tornozelo"> Tornozelo</label>
+        <label class="checkbox-chip"><input type="checkbox" value="pescoco"> Pescoço</label>
+      </div>
+    </label>
+
+    <label class="field">
+      <span>Observações adicionais (opcional)</span>
+      <textarea id="formObs" rows="3" placeholder="Ex: prefiro sem agachamento, só tenho halteres em casa..."></textarea>
+    </label>
+
     <button id="btnGenerate" class="btn primary">✨ Gerar treino com IA</button>
     <p id="generateError" class="error hidden"></p>
   </section>
